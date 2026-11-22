@@ -19,12 +19,6 @@ RetainIQ addresses a practical e-commerce problem: transaction data is abundant,
 - Which products appear together in invoice baskets?
 - Which customer groups and customers may warrant human review?
 
-## Data and attribution
-
-Chen, D. (2015). *Online Retail* [Dataset]. UCI Machine Learning Repository. [Dataset page](https://archive.ics.uci.edu/dataset/352/online-retail), [DOI 10.24432/C5BW33](https://doi.org/10.24432/C5BW33). Dataset license: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The source workbook contains **541,909 invoice-line rows** from 1 December 2010 through 9 December 2011. Raw files are downloaded to `data/raw/` and excluded from Git.
-
-The RetainIQ source code is provided under the [MIT License](LICENSE). This software license does not replace the dataset's attribution and license requirements.
-
 ## What the pipeline does
 
 ### Ingestion and cleaning
@@ -132,6 +126,10 @@ tests/                                     unit tests and analytical invariants
 ```
 
 Important generated artifacts include `reports/run_summary.json`, `data/processed/prediction/model_metrics.json`, `reliability_curve.csv`, `rolling_origin_metrics.json`, `cluster_stability.json`, `secondary_k4_profiles.csv`, and `cohort_metadata.csv`. The complete generated data and model binaries are ignored by Git and rebuilt by the pipeline.
+
+## Data and attribution
+
+Chen, D. (2015). *Online Retail* [Dataset]. UCI Machine Learning Repository. [Dataset page](https://archive.ics.uci.edu/dataset/352/online-retail), [DOI 10.24432/C5BW33](https://doi.org/10.24432/C5BW33). Dataset license: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The source workbook contains **541,909 invoice-line rows** from 1 December 2010 through 9 December 2011. Raw files are downloaded to `data/raw/` and excluded from Git.
 
 ## Reproduce locally
 
