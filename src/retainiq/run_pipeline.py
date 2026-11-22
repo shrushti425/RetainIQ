@@ -46,6 +46,7 @@ def run(source: Path, project_root: Path, skip_models: bool = False) -> dict:
     retention, cohort_revenue, lifecycle = cohort_analysis(orders)
     retention.rename_axis("cohort_month").reset_index().to_csv(data_dir / "retention_matrix.csv", index=False)
     cohort_revenue.to_csv(data_dir / "cohort_revenue.csv", index=False)
+    cohort_revenue[["cohort_month", "left_censored"]].drop_duplicates().to_csv(data_dir / "cohort_metadata.csv", index=False)
     lifecycle.to_csv(data_dir / "lifecycle_metrics.csv", index=False)
 
     frequent, rules = apriori_rules(lines)
@@ -69,17 +70,18 @@ def run(source: Path, project_root: Path, skip_models: bool = False) -> dict:
         "executive_metrics": eda["metrics"],
         "segmentation": segmentation_meta,
         "lifecycle": lifecycle.iloc[0].to_dict(),
+        "cohort_caveat": {"left_censored_cohorts": retention.attrs.get("left_censored_cohorts", []), "headline_retention_excludes_left_censored": True},
         "market_basket_rule_count": int(len(rules)),
         "prediction": model_result["report"],
         "model_metrics": model_result["metrics"],
     }
     (report_dir / "run_summary.json").write_text(json.dumps(summary, indent=2, default=str) + "\n")
-    _save_visualizations(report_dir / "visualizations", eda, rfm, retention, model_result["metrics"], data_dir)
+    _save_visualizations(report_dir / "visualizations", eda, rfm, retention, cohort_revenue, model_result["metrics"], data_dir)
     LOG.info("Pipeline complete; artifacts in %s", data_dir)
     return summary
 
 
-def _save_visualizations(folder: Path, eda: dict, rfm: pd.DataFrame, retention: pd.DataFrame, metrics: list, data_dir: Path) -> None:
+def _save_visualizations(folder: Path, eda: dict, rfm: pd.DataFrame, retention: pd.DataFrame, cohort_revenue: pd.DataFrame, metrics: list, data_dir: Path) -> None:
     folder.mkdir(parents=True, exist_ok=True)
     charts = {
         "monthly_revenue.html": px.line(eda["monthly"], x="OrderMonth", y="revenue", markers=True, title="Monthly observed positive-sales revenue", template="plotly_dark"),
@@ -88,7 +90,8 @@ def _save_visualizations(folder: Path, eda: dict, rfm: pd.DataFrame, retention: 
         "customer_order_distribution.html": px.bar(eda["frequency_distribution"].head(25), x="order_count", y="customers", title="Identified customer purchase frequency distribution", template="plotly_dark"),
     }
     matrix = retention.copy()
-    matrix.index = matrix.index.astype(str)
+    left_censored = set(cohort_revenue.loc[cohort_revenue["left_censored"], "cohort_month"].astype(str))
+    matrix.index = [f"{month} *" if str(month) in left_censored else str(month) for month in matrix.index]
     charts["cohort_retention.html"] = px.imshow(matrix, aspect="auto", zmin=0, zmax=1, color_continuous_scale="Teal", title="Monthly customer cohort retention")
     if metrics:
         metrics_frame = pd.DataFrame(metrics)

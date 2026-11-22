@@ -281,20 +281,25 @@ def cohort_page(orders: pd.DataFrame) -> None:
         st.info("No identified customer invoices are available for these filters.")
         return
     retention, revenue, lifecycle = cohort_analysis(orders)
-    a, b, c = st.columns(3)
+    left_censored = set(revenue.loc[revenue["left_censored"], "cohort_month"].astype(str))
+    st.warning(f"The first observed cohort ({', '.join(sorted(left_censored))}) is left-censored: customers may have purchased before the dataset begins. It remains visible with an explicit marker, but is excluded from the headline month-one retention statistic.", title="Cohort boundary caveat")
+    eligible = retention.loc[~retention.index.astype(str).isin(left_censored)]
+    month_one = eligible[1].dropna() if 1 in eligible.columns else pd.Series(dtype=float)
+    a, b, c, d = st.columns(4)
     life = lifecycle.iloc[0]
-    a.metric("Repeat customers", f"{int(life['repeat_customers']):,}")
-    b.metric("Repeat purchase rate", f"{life['repeat_rate']:.1%}")
-    c.metric("Median days to second order", f"{life['median_days_to_second_order']:.0f}" if pd.notna(life["median_days_to_second_order"]) else "—")
+    a.metric("Median month-one retention · eligible cohorts", f"{month_one.median():.1%}" if not month_one.empty else "—")
+    b.metric("Eligible cohorts with observed month one", f"{len(month_one):,}")
+    c.metric("Repeat customers · full observed history", f"{int(life['repeat_customers']):,}")
+    d.metric("Median days to second order", f"{life['median_days_to_second_order']:.0f}" if pd.notna(life["median_days_to_second_order"]) else "—")
     matrix = retention.copy()
-    matrix.index = matrix.index.astype(str)
+    matrix.index = [f"{month} * left-censored" if str(month) in left_censored else str(month) for month in matrix.index]
     st.plotly_chart(px.imshow(matrix, aspect="auto", color_continuous_scale="Teal", zmin=0, zmax=1, labels={"x": "Months since first purchase", "y": "Acquisition cohort", "color": "Retention"}, title="Monthly customer cohort retention", template="plotly_dark"), width="stretch")
     curves = matrix.reset_index(names="cohort_month").melt(id_vars="cohort_month", var_name="cohort_age", value_name="retention")
     st.plotly_chart(px.line(curves, x="cohort_age", y="retention", color="cohort_month", markers=True, title="Retention curves by acquisition month", labels={"cohort_age": "Months since acquisition", "retention": "Customer retention"}, template="plotly_dark").update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)"), width="stretch")
     st.subheader("Revenue by cohort")
     st.plotly_chart(px.density_heatmap(revenue, x="cohort_index", y="cohort_month", z="revenue", histfunc="sum", color_continuous_scale="Teal", title="Observed cohort revenue by elapsed month", labels={"cohort_index": "Months since first purchase", "cohort_month": "Acquisition cohort", "z": "Revenue (£)"}), width="stretch")
     st.dataframe(revenue, width="stretch", hide_index=True)
-    st.caption("Cohort age zero is the first calendar month with a purchase. Retention is active identified customers in month N / customers in month zero. Incomplete recent cohorts have fewer observable months.")
+    st.caption("Cohort age zero is the first calendar month with a purchase. Retention is active identified customers in month N / customers in month zero. The Dec 2010 boundary cohort is marked left-censored and excluded from the headline month-one statistic; incomplete recent cohorts have fewer observable months.")
 
 
 def product_page(data: dict, lines: pd.DataFrame, context: dict) -> None:
