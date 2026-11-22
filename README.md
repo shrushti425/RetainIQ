@@ -37,10 +37,6 @@ RetainIQ addresses a practical e-commerce problem: transaction data is abundant,
 | Which products appear together in invoice baskets? | Apriori market-basket analysis | Product Intelligence |
 | Which customer groups and customers may warrant human review? | Segmentation, prediction, and the revenue-exposure proxy | Business Recommendations |
  
-## Data and attribution
- 
-Chen, D. (2015). *Online Retail* [Dataset]. UCI Machine Learning Repository. [Dataset page](https://archive.ics.uci.edu/dataset/352/online-retail), [DOI 10.24432/C5BW33](https://doi.org/10.24432/C5BW33). Dataset license: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The source workbook contains **541,909 invoice-line rows** from 1 December 2010 through 9 December 2011. Raw files are downloaded to `data/raw/` and excluded from Git.
- 
 ## Methodology
  
 The pipeline runs in six stages: cleaning, exploratory analysis, customer segmentation, repeat-purchase prediction, cohort retention, and market-basket analysis.
@@ -135,6 +131,10 @@ Date, country, customer, segment, product, and revenue filters are available whe
 | Executive overview | Customer segments | Predictive intelligence |
 |---|---|---|
 | ![RetainIQ executive overview](docs/img/retainiq-executive-overview.png) | ![RetainIQ customer segmentation](docs/img/retainiq-customer-segmentation.png) | ![RetainIQ predictive intelligence](docs/img/retainiq-predictive-intelligence.png) |
+
+## Data and attribution
+ 
+Chen, D. (2015). *Online Retail* [Dataset]. UCI Machine Learning Repository. [Dataset page](https://archive.ics.uci.edu/dataset/352/online-retail), [DOI 10.24432/C5BW33](https://doi.org/10.24432/C5BW33). Dataset license: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The source workbook contains **541,909 invoice-line rows** from 1 December 2010 through 9 December 2011. Raw files are downloaded to `data/raw/` and excluded from Git.
  
 ## Limitations and responsible interpretation
  
