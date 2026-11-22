@@ -165,7 +165,14 @@ def _rolling_origin(orders: pd.DataFrame, lines: pd.DataFrame, factories: dict, 
             raise ValueError(f"Rolling-origin split at {cutoff} lacks both classes or eligible historical data.")
         training = _add_rfm_score(training)
         validation = _add_rfm_score(validation)
-        origin_result = {"cutoff": cutoff, "training_cutoffs": eligible, "models": {}}
+        origin_result = {
+            "cutoff": cutoff,
+            "training_cutoffs": eligible,
+            "validation_rows": int(len(validation)),
+            "positive_count": int(validation["label"].sum()),
+            "positive_rate": float(validation["label"].mean()),
+            "models": {},
+        }
         positive_weight = float((training["label"].eq(0).sum()) / max(training["label"].eq(1).sum(), 1))
         for model_i, (name, factory) in enumerate(factories.items()):
             model = factory() if name != "XGBoost" else _xgboost_pipeline(positive_weight, seed)

@@ -1,8 +1,20 @@
 # RetainIQ — customer intelligence and revenue analysis
 
-RetainIQ is an end-to-end analytics project built on the UCI Online Retail transaction history. It turns invoice-line records into auditable sales tables, customer and cohort analyses, product associations, predictive scores, and an interactive Streamlit dashboard.
+RetainIQ addresses a practical e-commerce problem: transaction data is abundant, but operators need a defensible way to understand customer value, repeat-purchase behavior, and product demand before deciding where to investigate. This project builds an auditable analytics pipeline and interactive decision-support dashboard around those questions.
 
-The project is designed to support business decisions while keeping the evidence boundaries visible. It estimates observed repeat purchasing, not response to a retention intervention. Customer revenue exposure is a prioritization proxy, not predicted lost revenue. Product co-occurrence does not establish incremental bundle sales.
+**Problem and product:** convert raw invoice lines into trustworthy customer, cohort, and product evidence, then surface it through an executive Streamlit dashboard.
+
+**Data and stack:** 541,909 UCI Online Retail records; Python, pandas, scikit-learn, XGBoost, SHAP, mlxtend, Streamlit, and Plotly.
+
+**Methods:** RFM features and K-Means segmentation; Apriori market-basket rules; temporal repeat-purchase prediction with Logistic Regression, Random Forest, and XGBoost; SHAP explanations and bootstrap evaluation.
+
+**Result and caveat:** the validation-selected XGBoost model reached test PR-AUC **0.762**, above the RFM-score baseline **0.677** and nearly tied with Logistic Regression (**0.762**). Historical observational data predicts repeat buying; it cannot establish whether a retention offer causes a purchase.
+
+## Screenshots
+
+| Executive overview | Customer segments | Predictive intelligence |
+|---|---|---|
+| ![RetainIQ executive overview](docs/img/retainiq-executive-overview.png) | ![RetainIQ customer segmentation](docs/img/retainiq-customer-segmentation.png) | ![RetainIQ predictive intelligence](docs/img/retainiq-predictive-intelligence.png) |
 
 ## Decision questions
 
@@ -12,12 +24,6 @@ The project is designed to support business decisions while keeping the evidence
 - How does month-one retention vary across acquisition cohorts?
 - Which products appear together in invoice baskets?
 - Which customer groups and customers may warrant human review?
-
-## Screenshots
-
-| Executive overview | Customer segments | Predictive intelligence |
-|---|---|---|
-| ![RetainIQ executive overview](docs/img/retainiq-executive-overview.png) | ![RetainIQ customer segmentation](docs/img/retainiq-customer-segmentation.png) | ![RetainIQ predictive intelligence](docs/img/retainiq-predictive-intelligence.png) |
 
 ## Data and attribution
 
@@ -75,15 +81,15 @@ The selected model's Platt sigmoid calibrator is fitted on validation prediction
 
 Three earlier cutoffs (31 July, 31 August, and 30 September 2011) are scored independently. A historical training snapshot is eligible only if its full 60-day outcome window ends on or before that origin's evaluation date. The table reports mean and sample standard deviation of PR-AUC over these three origins:
 
-| Method | Mean PR-AUC ± origin SD |
-|---|---:|
-| Logistic Regression | 0.745 ± 0.018 |
-| Random Forest | 0.742 ± 0.013 |
-| XGBoost | 0.752 ± 0.014 |
-| Recency baseline | 0.595 ± 0.019 |
-| RFM-score baseline | 0.661 ± 0.019 |
+| Method | Mean PR-AUC ± origin SD | 31 Jul PR-AUC (44.35% positive) | 31 Aug PR-AUC (49.06% positive) | 30 Sep PR-AUC (52.55% positive) |
+|---|---:|---:|---:|---:|
+| Logistic Regression | 0.745 ± 0.018 | 0.726 | 0.748 | 0.762 |
+| Random Forest | 0.742 ± 0.013 | 0.728 | 0.750 | 0.750 |
+| XGBoost | 0.752 ± 0.014 | 0.736 | 0.757 | 0.762 |
+| Recency baseline | 0.595 ± 0.019 | 0.574 | 0.602 | 0.610 |
+| RFM-score baseline | 0.661 ± 0.019 | 0.639 | 0.668 | 0.675 |
 
-Three origins provide a useful temporal check but remain a small sample of historical scoring dates. The standard deviation is not a confidence interval.
+Values in parentheses are positive-label prevalence for that evaluation origin: **44.35%** on 31 July (1,229 / 2,771 snapshots), **49.06%** on 31 August (1,360 / 2,772), and **52.55%** on 30 September (1,537 / 2,925). The changing prevalence matters because PR-AUC depends on the positive-class rate. Three origins provide a useful temporal check but remain a small sample of historical scoring dates; the standard deviation is not a confidence interval.
 
 ### Cohort retention and product associations
 
