@@ -1,4 +1,5 @@
-# RetainIQ — customer intelligence and revenue analysis
+# RetainIQ 
+Customer Intelligence and Revenue Analysis
 
 RetainIQ addresses a practical e-commerce problem: transaction data is abundant, but operators need a defensible way to understand customer value, repeat-purchase behavior, and product demand before deciding where to investigate. This project builds an auditable analytics pipeline and interactive decision-support dashboard around those questions.
 
