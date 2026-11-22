@@ -125,6 +125,65 @@ def _reliability_rows(labels: pd.Series, probability: np.ndarray, name: str, bin
     return [{"calibration": name, "mean_predicted_probability": float(x), "observed_fraction": float(y), "bin": i + 1} for i, (x, y) in enumerate(zip(predicted, observed))]
 
 
+def bootstrap_metric_cis(labels, scores, threshold: float, n_resamples: int = 1000, seed: int = 42) -> dict:
+    """Stratified percentile bootstrap CIs for ROC-AUC, average precision, and F1."""
+    y = np.asarray(labels, dtype=int)
+    score = np.asarray(scores, dtype=float)
+    if len(y) != len(score) or np.unique(y).size != 2:
+        raise ValueError("Bootstrap metrics need equal-length scores and labels containing both classes.")
+    rng = np.random.default_rng(seed)
+    by_class = [np.flatnonzero(y == label) for label in (0, 1)]
+    draws = {metric: np.empty(n_resamples, dtype=float) for metric in ("roc_auc", "pr_auc", "f1")}
+    for i in range(n_resamples):
+        sampled = np.concatenate([rng.choice(indices, size=len(indices), replace=True) for indices in by_class])
+        sample_y, sample_score = y[sampled], score[sampled]
+        draws["roc_auc"][i] = roc_auc_score(sample_y, sample_score)
+        draws["pr_auc"][i] = average_precision_score(sample_y, sample_score)
+        draws["f1"][i] = f1_score(sample_y, sample_score >= threshold, zero_division=0)
+    point = {
+        "roc_auc": float(roc_auc_score(y, score)),
+        "pr_auc": float(average_precision_score(y, score)),
+        "f1": float(f1_score(y, score >= threshold, zero_division=0)),
+    }
+    result = {}
+    for metric, values in draws.items():
+        result[metric] = {"estimate": point[metric], "ci_95": [float(v) for v in np.quantile(values, [0.025, 0.975])], "resamples": n_resamples}
+    return result
+
+
+def _rolling_origin(orders: pd.DataFrame, lines: pd.DataFrame, factories: dict, seed: int) -> dict:
+    """Evaluate 3 prior monthly cutoffs, training only on fully observed historical labels."""
+    eval_cutoffs = ["2011-07-31", "2011-08-31", "2011-09-30"]
+    candidate_train_cutoffs = ["2011-03-31", "2011-04-30", "2011-05-31", "2011-06-30", "2011-07-31"]
+    scores: dict[str, list[float]] = {name: [] for name in [*factories, "Recency baseline", "RFM score baseline"]}
+    by_origin = []
+    for origin_i, cutoff in enumerate(eval_cutoffs):
+        cutoff_ts = pd.Timestamp(cutoff)
+        eligible = [c for c in candidate_train_cutoffs if pd.Timestamp(c) + pd.Timedelta(60, unit="D") <= cutoff_ts]
+        training = pd.concat([make_snapshot(orders, lines, c) for c in eligible], ignore_index=True)
+        validation = make_snapshot(orders, lines, cutoff)
+        if training.empty or training["label"].nunique() < 2 or validation.empty or validation["label"].nunique() < 2:
+            raise ValueError(f"Rolling-origin split at {cutoff} lacks both classes or eligible historical data.")
+        training = _add_rfm_score(training)
+        validation = _add_rfm_score(validation)
+        origin_result = {"cutoff": cutoff, "training_cutoffs": eligible, "models": {}}
+        positive_weight = float((training["label"].eq(0).sum()) / max(training["label"].eq(1).sum(), 1))
+        for model_i, (name, factory) in enumerate(factories.items()):
+            model = factory() if name != "XGBoost" else _xgboost_pipeline(positive_weight, seed)
+            model.fit(training[FEATURES], training["label"])
+            probability = model.predict_proba(validation[FEATURES])[:, 1]
+            value = float(average_precision_score(validation["label"], probability))
+            scores[name].append(value)
+            origin_result["models"][name] = value
+        for name, column, direction in [("Recency baseline", "recency_days", -1), ("RFM score baseline", "rfm_score", 1)]:
+            value = float(average_precision_score(validation["label"], validation[column].to_numpy(dtype=float) * direction))
+            scores[name].append(value)
+            origin_result["models"][name] = value
+        by_origin.append(origin_result)
+    summary = {name: {"mean_pr_auc": float(np.mean(values)), "std_pr_auc": float(np.std(values, ddof=1)), "min_pr_auc": float(np.min(values)), "max_pr_auc": float(np.max(values)), "origins": values} for name, values in scores.items()}
+    return {"evaluation_cutoffs": eval_cutoffs, "by_origin": by_origin, "summary": summary, "spread_definition": "sample standard deviation across 3 rolling-origin PR-AUC values"}
+
+
 def train_and_evaluate(orders: pd.DataFrame, lines: pd.DataFrame, output_dir: Path, seed: int = 42) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
     snapshots = pd.concat([
@@ -178,6 +237,7 @@ def train_and_evaluate(orders: pd.DataFrame, lines: pd.DataFrame, output_dir: Pa
         model.fit(train_valid[FEATURES], train_valid["label"])
         probability = model.predict_proba(test[FEATURES])[:, 1]
         metrics = _metrics(test["label"], probability, thresholds[name])
+        metrics["bootstrap_ci_95"] = bootstrap_metric_cis(test["label"], probability, thresholds[name], n_resamples=1000, seed=seed + len(results))
         if name == selected:
             calibrated_probability = _apply_platt_calibrator(calibrator, probability)
             effective_probability = calibrated_probability if use_calibrated else probability
@@ -206,6 +266,7 @@ def train_and_evaluate(orders: pd.DataFrame, lines: pd.DataFrame, output_dir: Pa
     for name, (column, direction) in baseline_specs.items():
         score = test[column].to_numpy(dtype=float) * direction
         metrics = _metrics(test["label"], score, thresholds[name])
+        metrics["bootstrap_ci_95"] = bootstrap_metric_cis(test["label"], score, thresholds[name], n_resamples=1000, seed=seed + len(results))
         metrics.update({"model": name, "model_type": "baseline", "validation_pr_auc": validation_scores[name], "test_rows": len(test), "test_positive_rate": float(test["label"].mean())})
         results.append(metrics)
         fpr, tpr, _ = roc_curve(test["label"], score)
@@ -263,10 +324,12 @@ def train_and_evaluate(orders: pd.DataFrame, lines: pd.DataFrame, output_dir: Pa
         "selected_model_by_validation_pr_auc": selected,
         "selected_validation_pr_auc": validation_scores[selected],
         "calibration": {"method": "Platt sigmoid", "fit_split": "validation only", "validation_brier_uncalibrated": validation_brier_raw, "validation_brier_calibrated": validation_brier_calibrated, "use_calibrated_probabilities_for_exposure": bool(use_calibrated)},
+        "rolling_origin": _rolling_origin(orders, lines, factories, seed),
         "class_imbalance_train": {"positive": int(train["label"].sum()), "negative": int((train["label"] == 0).sum()), "positive_weight_xgb": float(positive_weight)},
         "snapshot_rows": {"train": int(len(train)), "validation": int(len(valid)), "test": int(len(test))},
         "limitations": ["Repeated customer snapshots are allowed across dates and are evaluated as future scoring occasions; customer ID is not a model feature.", "The test set is one final cutoff near the end of this short historical dataset.", "This dataset has no outreach or treatment data; model scores estimate observed purchasing, not intervention response or causal retention impact."],
     }
+    (output_dir / "rolling_origin_metrics.json").write_text(json.dumps(report["rolling_origin"], indent=2) + "\n")
     (output_dir / "prediction_report.json").write_text(json.dumps(report, indent=2) + "\n")
     return {"report": report, "metrics": results}
 
