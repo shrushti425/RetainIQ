@@ -10,10 +10,11 @@ import joblib
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.calibration import calibration_curve
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
-    average_precision_score, classification_report, confusion_matrix, f1_score,
+    average_precision_score, brier_score_loss, classification_report, confusion_matrix, f1_score,
     precision_recall_curve, precision_score, recall_score, roc_auc_score, roc_curve,
 )
 from sklearn.pipeline import make_pipeline
@@ -106,6 +107,24 @@ def _metrics(y: pd.Series, probability: np.ndarray, threshold: float) -> dict:
     }
 
 
+def _fit_platt_calibrator(probability: np.ndarray, labels: pd.Series, seed: int = 42) -> LogisticRegression:
+    """Fit sigmoid calibration on validation predictions only."""
+    clipped = np.clip(np.asarray(probability, dtype=float), 1e-6, 1 - 1e-6)
+    logits = np.log(clipped / (1 - clipped)).reshape(-1, 1)
+    return LogisticRegression(C=1e6, solver="lbfgs", random_state=seed).fit(logits, labels)
+
+
+def _apply_platt_calibrator(calibrator: LogisticRegression, probability: np.ndarray) -> np.ndarray:
+    clipped = np.clip(np.asarray(probability, dtype=float), 1e-6, 1 - 1e-6)
+    logits = np.log(clipped / (1 - clipped)).reshape(-1, 1)
+    return calibrator.predict_proba(logits)[:, 1]
+
+
+def _reliability_rows(labels: pd.Series, probability: np.ndarray, name: str, bins: int = 10) -> list[dict]:
+    observed, predicted = calibration_curve(labels, probability, n_bins=bins, strategy="quantile")
+    return [{"calibration": name, "mean_predicted_probability": float(x), "observed_fraction": float(y), "bin": i + 1} for i, (x, y) in enumerate(zip(predicted, observed))]
+
+
 def train_and_evaluate(orders: pd.DataFrame, lines: pd.DataFrame, output_dir: Path, seed: int = 42) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
     snapshots = pd.concat([
@@ -124,11 +143,13 @@ def train_and_evaluate(orders: pd.DataFrame, lines: pd.DataFrame, output_dir: Pa
         "XGBoost": lambda: _xgboost_pipeline(positive_weight, seed),
     }
     validation_scores = {}
+    validation_probabilities = {}
     thresholds = {}
     for name, factory in factories.items():
         model = factory()
         model.fit(train[FEATURES], train["label"])
         probability = model.predict_proba(valid[FEATURES])[:, 1]
+        validation_probabilities[name] = probability
         validation_scores[name] = float(average_precision_score(valid["label"], probability))
         thresholds[name] = _select_threshold(valid["label"], probability)
     baseline_specs = {
@@ -140,10 +161,16 @@ def train_and_evaluate(orders: pd.DataFrame, lines: pd.DataFrame, output_dir: Pa
         validation_scores[name] = float(average_precision_score(valid["label"], validation_rank))
         thresholds[name] = _select_threshold(valid["label"], validation_rank)
     selected = max(factories, key=validation_scores.get)
+    calibrator = _fit_platt_calibrator(validation_probabilities[selected], valid["label"], seed)
+    validation_brier_raw = float(brier_score_loss(valid["label"], validation_probabilities[selected]))
+    validation_probability_calibrated = _apply_platt_calibrator(calibrator, validation_probabilities[selected])
+    validation_brier_calibrated = float(brier_score_loss(valid["label"], validation_probability_calibrated))
+    use_calibrated = validation_brier_calibrated < validation_brier_raw
     # Refit on train + validation only after choosing model family and threshold on validation.
     train_valid = pd.concat([train, valid], ignore_index=True)
     results = []
     test_curves = []
+    reliability = []
     prediction_rows = []
     final_models = {}
     for name, factory in factories.items():
@@ -151,6 +178,17 @@ def train_and_evaluate(orders: pd.DataFrame, lines: pd.DataFrame, output_dir: Pa
         model.fit(train_valid[FEATURES], train_valid["label"])
         probability = model.predict_proba(test[FEATURES])[:, 1]
         metrics = _metrics(test["label"], probability, thresholds[name])
+        if name == selected:
+            calibrated_probability = _apply_platt_calibrator(calibrator, probability)
+            effective_probability = calibrated_probability if use_calibrated else probability
+            metrics["brier_score"] = float(brier_score_loss(test["label"], probability))
+            metrics["calibrated_brier_score"] = float(brier_score_loss(test["label"], calibrated_probability))
+            metrics["effective_brier_score"] = float(brier_score_loss(test["label"], effective_probability))
+            reliability.extend(_reliability_rows(test["label"], probability, "Uncalibrated"))
+            reliability.extend(_reliability_rows(test["label"], calibrated_probability, "Platt calibrated"))
+        else:
+            effective_probability = probability
+            metrics["brier_score"] = float(brier_score_loss(test["label"], probability))
         metrics.update({"model": name, "validation_pr_auc": validation_scores[name], "test_rows": len(test), "test_positive_rate": float(test["label"].mean())})
         results.append(metrics)
         fpr, tpr, _ = roc_curve(test["label"], probability)
@@ -159,7 +197,8 @@ def train_and_evaluate(orders: pd.DataFrame, lines: pd.DataFrame, output_dir: Pa
         test_curves.extend([{"model": name, "curve": "precision_recall", "x": float(x), "y": float(y)} for x, y in zip(pr_recall, pr_precision)])
         preds = test[["CustomerID", "cutoff", "label"]].copy()
         preds["model"] = name
-        preds["probability_repeat_60d"] = probability
+        preds["probability_repeat_60d_raw"] = probability
+        preds["probability_repeat_60d"] = effective_probability
         preds["risk_band"] = pd.cut(probability, [-0.01, 0.3, 0.6, 1.01], labels=["Higher repeat likelihood", "Uncertain", "Lower repeat likelihood"])
         prediction_rows.append(preds)
         final_models[name] = model
@@ -180,6 +219,8 @@ def train_and_evaluate(orders: pd.DataFrame, lines: pd.DataFrame, output_dir: Pa
         preds["risk_band"] = pd.cut(pd.Series(score, index=test.index).rank(pct=True), [-0.01, 0.3, 0.6, 1.01], labels=["Lower rank", "Middle rank", "Higher rank"])
         prediction_rows.append(preds)
     pd.DataFrame(results).to_json(output_dir / "model_metrics.json", orient="records", indent=2)
+    pd.DataFrame(reliability).to_csv(output_dir / "reliability_curve.csv", index=False)
+    joblib.dump(calibrator, output_dir / "selected_model_platt_calibrator.joblib")
     pd.DataFrame(test_curves).to_csv(output_dir / "model_curves.csv", index=False)
     predictions = pd.concat(prediction_rows, ignore_index=True)
     predictions.to_csv(output_dir / "predictions.csv", index=False)
@@ -221,6 +262,7 @@ def train_and_evaluate(orders: pd.DataFrame, lines: pd.DataFrame, output_dir: Pa
         "feature_columns": FEATURES,
         "selected_model_by_validation_pr_auc": selected,
         "selected_validation_pr_auc": validation_scores[selected],
+        "calibration": {"method": "Platt sigmoid", "fit_split": "validation only", "validation_brier_uncalibrated": validation_brier_raw, "validation_brier_calibrated": validation_brier_calibrated, "use_calibrated_probabilities_for_exposure": bool(use_calibrated)},
         "class_imbalance_train": {"positive": int(train["label"].sum()), "negative": int((train["label"] == 0).sum()), "positive_weight_xgb": float(positive_weight)},
         "snapshot_rows": {"train": int(len(train)), "validation": int(len(valid)), "test": int(len(test))},
         "limitations": ["Repeated customer snapshots are allowed across dates and are evaluated as future scoring occasions; customer ID is not a model feature.", "The test set is one final cutoff near the end of this short historical dataset.", "This dataset has no outreach or treatment data; model scores estimate observed purchasing, not intervention response or causal retention impact."],
