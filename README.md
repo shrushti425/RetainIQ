@@ -20,9 +20,9 @@ RetainIQ addresses a practical e-commerce problem: transaction data is abundant,
 ## Contents
  
 1. [Decision questions](#decision-questions)
-2. [Data and attribution](#data-and-attribution)
-3. [Methodology](#methodology)
-4. [Streamlit dashboard](#streamlit-dashboard)
+2. [Methodology](#methodology)
+3. [Streamlit dashboard](#streamlit-dashboard)
+4. [Data and attribution](#data-and-attribution)
 5. [Limitations and responsible interpretation](#limitations-and-responsible-interpretation)
 6. [Repository structure and outputs](#repository-structure-and-outputs)
 7. [Reproduce locally](#reproduce-locally)
