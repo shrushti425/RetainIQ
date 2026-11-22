@@ -107,11 +107,11 @@ def _metrics(y: pd.Series, probability: np.ndarray, threshold: float) -> dict:
     }
 
 
-def _fit_platt_calibrator(probability: np.ndarray, labels: pd.Series, seed: int = 42) -> LogisticRegression:
+def _fit_validation_calibrator(validation_probability: np.ndarray, validation_labels: pd.Series, seed: int = 42) -> LogisticRegression:
     """Fit sigmoid calibration on validation predictions only."""
-    clipped = np.clip(np.asarray(probability, dtype=float), 1e-6, 1 - 1e-6)
+    clipped = np.clip(np.asarray(validation_probability, dtype=float), 1e-6, 1 - 1e-6)
     logits = np.log(clipped / (1 - clipped)).reshape(-1, 1)
-    return LogisticRegression(C=1e6, solver="lbfgs", random_state=seed).fit(logits, labels)
+    return LogisticRegression(C=1e6, solver="lbfgs", random_state=seed).fit(logits, validation_labels)
 
 
 def _apply_platt_calibrator(calibrator: LogisticRegression, probability: np.ndarray) -> np.ndarray:
@@ -157,9 +157,8 @@ def _rolling_origin(orders: pd.DataFrame, lines: pd.DataFrame, factories: dict, 
     candidate_train_cutoffs = ["2011-03-31", "2011-04-30", "2011-05-31", "2011-06-30", "2011-07-31"]
     scores: dict[str, list[float]] = {name: [] for name in [*factories, "Recency baseline", "RFM score baseline"]}
     by_origin = []
-    for origin_i, cutoff in enumerate(eval_cutoffs):
-        cutoff_ts = pd.Timestamp(cutoff)
-        eligible = [c for c in candidate_train_cutoffs if pd.Timestamp(c) + pd.Timedelta(60, unit="D") <= cutoff_ts]
+    for cutoff in eval_cutoffs:
+        eligible = _eligible_training_cutoffs(cutoff, candidate_train_cutoffs, horizon_days=60)
         training = pd.concat([make_snapshot(orders, lines, c) for c in eligible], ignore_index=True)
         validation = make_snapshot(orders, lines, cutoff)
         if training.empty or training["label"].nunique() < 2 or validation.empty or validation["label"].nunique() < 2:
@@ -175,13 +174,28 @@ def _rolling_origin(orders: pd.DataFrame, lines: pd.DataFrame, factories: dict, 
             value = float(average_precision_score(validation["label"], probability))
             scores[name].append(value)
             origin_result["models"][name] = value
-        for name, column, direction in [("Recency baseline", "recency_days", -1), ("RFM score baseline", "rfm_score", 1)]:
-            value = float(average_precision_score(validation["label"], validation[column].to_numpy(dtype=float) * direction))
+        for name in ["Recency baseline", "RFM score baseline"]:
+            value = float(average_precision_score(validation["label"], _baseline_score(validation, name)))
             scores[name].append(value)
             origin_result["models"][name] = value
         by_origin.append(origin_result)
     summary = {name: {"mean_pr_auc": float(np.mean(values)), "std_pr_auc": float(np.std(values, ddof=1)), "min_pr_auc": float(np.min(values)), "max_pr_auc": float(np.max(values)), "origins": values} for name, values in scores.items()}
     return {"evaluation_cutoffs": eval_cutoffs, "by_origin": by_origin, "summary": summary, "spread_definition": "sample standard deviation across 3 rolling-origin PR-AUC values"}
+
+
+def _eligible_training_cutoffs(evaluation_cutoff: str, candidates: list[str], horizon_days: int = 60) -> list[str]:
+    """Return train snapshot cutoffs whose complete outcomes precede evaluation."""
+    evaluation_ts = pd.Timestamp(evaluation_cutoff)
+    return [cutoff for cutoff in candidates if pd.Timestamp(cutoff) + pd.Timedelta(horizon_days, unit="D") <= evaluation_ts]
+
+
+def _baseline_score(frame: pd.DataFrame, baseline: str) -> np.ndarray:
+    """Higher scores indicate higher expected repeat-purchase rank."""
+    if baseline == "Recency baseline":
+        return -frame["recency_days"].to_numpy(dtype=float)
+    if baseline == "RFM score baseline":
+        return frame["rfm_score"].to_numpy(dtype=float)
+    raise ValueError(f"Unknown ranking baseline: {baseline}")
 
 
 def train_and_evaluate(orders: pd.DataFrame, lines: pd.DataFrame, output_dir: Path, seed: int = 42) -> dict:
@@ -215,12 +229,12 @@ def train_and_evaluate(orders: pd.DataFrame, lines: pd.DataFrame, output_dir: Pa
         "Recency baseline": ("recency_days", -1),
         "RFM score baseline": ("rfm_score", 1),
     }
-    for name, (column, direction) in baseline_specs.items():
-        validation_rank = valid[column].to_numpy(dtype=float) * direction
+    for name in baseline_specs:
+        validation_rank = _baseline_score(valid, name)
         validation_scores[name] = float(average_precision_score(valid["label"], validation_rank))
         thresholds[name] = _select_threshold(valid["label"], validation_rank)
     selected = max(factories, key=validation_scores.get)
-    calibrator = _fit_platt_calibrator(validation_probabilities[selected], valid["label"], seed)
+    calibrator = _fit_validation_calibrator(validation_probabilities[selected], valid["label"], seed)
     validation_brier_raw = float(brier_score_loss(valid["label"], validation_probabilities[selected]))
     validation_probability_calibrated = _apply_platt_calibrator(calibrator, validation_probabilities[selected])
     validation_brier_calibrated = float(brier_score_loss(valid["label"], validation_probability_calibrated))
@@ -263,8 +277,8 @@ def train_and_evaluate(orders: pd.DataFrame, lines: pd.DataFrame, output_dir: Pa
         prediction_rows.append(preds)
         final_models[name] = model
         joblib.dump(model, output_dir / (name.lower().replace(" ", "_") + ".joblib"))
-    for name, (column, direction) in baseline_specs.items():
-        score = test[column].to_numpy(dtype=float) * direction
+    for name in baseline_specs:
+        score = _baseline_score(test, name)
         metrics = _metrics(test["label"], score, thresholds[name])
         metrics["bootstrap_ci_95"] = bootstrap_metric_cis(test["label"], score, thresholds[name], n_resamples=1000, seed=seed + len(results))
         metrics.update({"model": name, "model_type": "baseline", "validation_pr_auc": validation_scores[name], "test_rows": len(test), "test_positive_rate": float(test["label"].mean())})
