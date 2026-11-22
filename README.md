@@ -17,12 +17,6 @@ RetainIQ addresses a practical e-commerce problem: transaction data is abundant,
 | **Key caveat** | Historical observational data predicts repeat buying; it cannot establish whether a retention offer causes a purchase. |
 | **Deliverable** | A seven-page interactive Streamlit dashboard backed by a reproducible pipeline |
  
-### Screenshots
- 
-| Executive overview | Customer segments | Predictive intelligence |
-|---|---|---|
-| ![RetainIQ executive overview](docs/img/retainiq-executive-overview.png) | ![RetainIQ customer segmentation](docs/img/retainiq-customer-segmentation.png) | ![RetainIQ predictive intelligence](docs/img/retainiq-predictive-intelligence.png) |
- 
 ## Contents
  
 1. [Decision questions](#decision-questions)
@@ -135,6 +129,12 @@ The dashboard has seven pages:
 6. **Business Recommendations**: evidence-linked actions and limitations.
 7. **Data Explorer**: prepared tables and cleaning audit.
 Date, country, customer, segment, product, and revenue filters are available where applicable. Predictive test metrics describe fixed historical cutoffs and do not change with dashboard filters.
+
+### Screenshots
+ 
+| Executive overview | Customer segments | Predictive intelligence |
+|---|---|---|
+| ![RetainIQ executive overview](docs/img/retainiq-executive-overview.png) | ![RetainIQ customer segmentation](docs/img/retainiq-customer-segmentation.png) | ![RetainIQ predictive intelligence](docs/img/retainiq-predictive-intelligence.png) |
  
 ## Limitations and responsible interpretation
  
