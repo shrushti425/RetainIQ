@@ -11,12 +11,6 @@ RetainIQ addresses a practical e-commerce problem: transaction data is abundant,
 
 **Result and caveat:** the validation-selected XGBoost model reached test PR-AUC **0.762**, above the RFM-score baseline **0.677** and nearly tied with Logistic Regression (**0.762**). Historical observational data predicts repeat buying; it cannot establish whether a retention offer causes a purchase.
 
-## Screenshots
-
-| Executive overview | Customer segments | Predictive intelligence |
-|---|---|---|
-| ![RetainIQ executive overview](docs/img/retainiq-executive-overview.png) | ![RetainIQ customer segmentation](docs/img/retainiq-customer-segmentation.png) | ![RetainIQ predictive intelligence](docs/img/retainiq-predictive-intelligence.png) |
-
 ## Decision questions
 
 - Where do revenue, order frequency, country, and product patterns concentrate?
@@ -111,6 +105,12 @@ Run the seven pages locally:
 7. **Data Explorer** — prepared tables and cleaning audit.
 
 Date, country, customer, segment, product, and revenue filters are available where applicable. Predictive test metrics describe fixed historical cutoffs and do not change with dashboard filters.
+
+## Screenshots
+
+| Executive overview | Customer segments | Predictive intelligence |
+|---|---|---|
+| ![RetainIQ executive overview](docs/img/retainiq-executive-overview.png) | ![RetainIQ customer segmentation](docs/img/retainiq-customer-segmentation.png) | ![RetainIQ predictive intelligence](docs/img/retainiq-predictive-intelligence.png) |
 
 ## Architecture and outputs
 
