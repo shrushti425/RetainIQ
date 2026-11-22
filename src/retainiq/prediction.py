@@ -238,6 +238,7 @@ def train_and_evaluate(orders: pd.DataFrame, lines: pd.DataFrame, output_dir: Pa
     validation_brier_raw = float(brier_score_loss(valid["label"], validation_probabilities[selected]))
     validation_probability_calibrated = _apply_platt_calibrator(calibrator, validation_probabilities[selected])
     validation_brier_calibrated = float(brier_score_loss(valid["label"], validation_probability_calibrated))
+    # Calibration use is selected using validation only; the held-out test is diagnostic.
     use_calibrated = validation_brier_calibrated < validation_brier_raw
     # Refit on train + validation only after choosing model family and threshold on validation.
     train_valid = pd.concat([train, valid], ignore_index=True)
@@ -254,9 +255,11 @@ def train_and_evaluate(orders: pd.DataFrame, lines: pd.DataFrame, output_dir: Pa
         metrics["bootstrap_ci_95"] = bootstrap_metric_cis(test["label"], probability, thresholds[name], n_resamples=1000, seed=seed + len(results))
         if name == selected:
             calibrated_probability = _apply_platt_calibrator(calibrator, probability)
+            raw_test_brier = float(brier_score_loss(test["label"], probability))
+            calibrated_test_brier = float(brier_score_loss(test["label"], calibrated_probability))
             effective_probability = calibrated_probability if use_calibrated else probability
-            metrics["brier_score"] = float(brier_score_loss(test["label"], probability))
-            metrics["calibrated_brier_score"] = float(brier_score_loss(test["label"], calibrated_probability))
+            metrics["brier_score"] = raw_test_brier
+            metrics["calibrated_brier_score"] = calibrated_test_brier
             metrics["effective_brier_score"] = float(brier_score_loss(test["label"], effective_probability))
             reliability.extend(_reliability_rows(test["label"], probability, "Uncalibrated"))
             reliability.extend(_reliability_rows(test["label"], calibrated_probability, "Platt calibrated"))
@@ -337,7 +340,7 @@ def train_and_evaluate(orders: pd.DataFrame, lines: pd.DataFrame, output_dir: Pa
         "feature_columns": FEATURES,
         "selected_model_by_validation_pr_auc": selected,
         "selected_validation_pr_auc": validation_scores[selected],
-        "calibration": {"method": "Platt sigmoid", "fit_split": "validation only", "validation_brier_uncalibrated": validation_brier_raw, "validation_brier_calibrated": validation_brier_calibrated, "use_calibrated_probabilities_for_exposure": bool(use_calibrated)},
+        "calibration": {"method": "Platt sigmoid", "fit_split": "validation only", "decision_split": "validation only", "validation_brier_uncalibrated": validation_brier_raw, "validation_brier_calibrated": validation_brier_calibrated, "test_brier_uncalibrated": next(row["brier_score"] for row in results if row["model"] == selected), "test_brier_calibrated": next(row["calibrated_brier_score"] for row in results if row["model"] == selected), "use_calibrated_probabilities_for_exposure": bool(use_calibrated)},
         "rolling_origin": _rolling_origin(orders, lines, factories, seed),
         "class_imbalance_train": {"positive": int(train["label"].sum()), "negative": int((train["label"] == 0).sum()), "positive_weight_xgb": float(positive_weight)},
         "snapshot_rows": {"train": int(len(train)), "validation": int(len(valid)), "test": int(len(test))},

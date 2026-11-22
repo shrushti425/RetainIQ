@@ -22,8 +22,8 @@ def cohort_analysis(orders: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, p
         retention.loc[cohort_month, retention.columns > maximum_age] = float("nan")
     revenue = data.groupby(["cohort_month", "cohort_index"], as_index=False).agg(revenue=("revenue", "sum"), active_customers=("CustomerID", "nunique"))
     revenue["revenue_per_cohort_customer"] = revenue.apply(lambda row: row["revenue"] / cohort_size.loc[row["cohort_month"]], axis=1)
-    first_observed_cohort = data["cohort_month"].min()
-    revenue["left_censored"] = revenue["cohort_month"].eq(first_observed_cohort)
+    left_censored_cohort = pd.Period("2010-12", freq="M")
+    revenue["left_censored"] = revenue["cohort_month"].eq(left_censored_cohort)
     repeat = data.groupby("CustomerID").agg(orders=("InvoiceNo", "nunique"), revenue=("revenue", "sum"))
     lifecycle = pd.DataFrame([{
         "customers": len(repeat),
@@ -33,7 +33,7 @@ def cohort_analysis(orders: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, p
     }])
     retention.index = retention.index.astype(str)
     revenue["cohort_month"] = revenue["cohort_month"].astype(str)
-    retention.attrs["left_censored_cohorts"] = [str(first_observed_cohort)]
+    retention.attrs["left_censored_cohorts"] = [str(left_censored_cohort)] if left_censored_cohort in data["cohort_month"].values else []
     return retention, revenue, lifecycle
 
 

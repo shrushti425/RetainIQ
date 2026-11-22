@@ -238,7 +238,8 @@ def predictive_page(data: dict, context: dict) -> None:
     metrics = display_metrics.loc[display_metrics["model"].eq(selected)].iloc[0]
     left, right = st.columns(2)
     left.metric(f"Selected model · {selected}", f"PR-AUC {metrics['pr_auc']:.3f}", f"ROC-AUC {metrics['roc_auc']:.3f}")
-    right.plotly_chart(px.bar(view, x="model", y="pr_auc", color="model", title="Held-out PR-AUC (primary under class imbalance)", template="plotly_dark").update_layout(showlegend=False, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)"), width="stretch")
+    comparison = view.melt(id_vars="model", value_vars=["roc_auc", "pr_auc"], var_name="metric", value_name="score")
+    right.plotly_chart(px.bar(comparison, x="model", y="score", color="metric", barmode="group", title="Held-out ROC-AUC and PR-AUC", template="plotly_dark", labels={"score": "Score", "metric": "Metric"}).update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)"), width="stretch")
     calibration = report["calibration"]
     st.caption(f"Platt sigmoid calibration is fitted on validation predictions only. Validation Brier: {calibration['validation_brier_uncalibrated']:.3f} raw → {calibration['validation_brier_calibrated']:.3f} calibrated. Calibrated probabilities {'are' if calibration['use_calibrated_probabilities_for_exposure'] else 'are not'} used for the exposure proxy.")
     if "brier_score" in metrics.index and pd.notna(metrics["brier_score"]):

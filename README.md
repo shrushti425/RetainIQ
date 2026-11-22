@@ -1,117 +1,174 @@
-# RetainIQ
+# RetainIQ — customer intelligence and revenue analysis
 
-RetainIQ is a customer intelligence and revenue analysis prototype built on the UCI Online Retail transaction history. It combines reproducible preprocessing, descriptive analytics, customer segmentation, temporal repeat-purchase modeling, cohort retention, product associations, and an interactive Streamlit application.
+RetainIQ is an end-to-end analytics project built on the UCI Online Retail transaction history. It turns invoice-line records into auditable sales tables, customer and cohort analyses, product associations, predictive scores, and an interactive Streamlit dashboard.
 
-## What it answers
+The project is designed to support business decisions while keeping the evidence boundaries visible. It estimates observed repeat purchasing, not response to a retention intervention. Customer revenue exposure is a prioritization proxy, not predicted lost revenue. Product co-occurrence does not establish incremental bundle sales.
 
-- What revenue, order, customer, country, and product patterns are visible in the source period?
+## Decision questions
+
+- Where do revenue, order frequency, country, and product patterns concentrate?
 - How do customers differ in recency, frequency, and monetary value?
-- Which active customers are more or less likely to purchase in the next 60 days, based on historical behavior?
-- How does repeat purchasing vary by acquisition cohort?
-- Which products co-occur in invoice baskets?
-- Which customers and segments may merit human review based on observed value and model scores?
+- Which active customers have higher observed purchase probability over the next 60 days?
+- How does month-one retention vary across acquisition cohorts?
+- Which products appear together in invoice baskets?
+- Which customer groups and customers may warrant human review?
 
-The system reports observed revenue, predicted purchasing probability, and revenue exposure proxies separately. It makes no causal claims about retention actions.
+## Screenshots
 
-## Dataset and attribution
+| Executive overview | Customer segments | Predictive intelligence |
+|---|---|---|
+| ![RetainIQ executive overview](docs/img/retainiq-executive-overview.png) | ![RetainIQ customer segmentation](docs/img/retainiq-customer-segmentation.png) | ![RetainIQ predictive intelligence](docs/img/retainiq-predictive-intelligence.png) |
 
-Chen, D. (2015). *Online Retail* [Dataset]. UCI Machine Learning Repository. [Dataset page](https://archive.ics.uci.edu/dataset/352/online-retail), [DOI 10.24432/C5BW33](https://doi.org/10.24432/C5BW33). Licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The source contains 541,909 invoice-line records from 1 December 2010 through 9 December 2011. Raw source files are stored under `data/raw/` locally and ignored by Git.
+## Data and attribution
 
-## Architecture
+Chen, D. (2015). *Online Retail* [Dataset]. UCI Machine Learning Repository. [Dataset page](https://archive.ics.uci.edu/dataset/352/online-retail), [DOI 10.24432/C5BW33](https://doi.org/10.24432/C5BW33). Dataset license: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The source workbook contains **541,909 invoice-line rows** from 1 December 2010 through 9 December 2011. Raw files are downloaded to `data/raw/` and excluded from Git.
+
+The RetainIQ source code is provided under the [MIT License](LICENSE). This software license does not replace the dataset's attribution and license requirements.
+
+## What the pipeline does
+
+### Ingestion and cleaning
+
+`src/retainiq/data/download.py` retrieves the original UCI data; `profile.py` records the workbook schema, quality profile, and SHA-256. `preprocessing.py` applies mutually exclusive, first-match row decisions so the audit reconciles to the source. It retains the first exact duplicate, separates cancellation invoice lines, segregates other negative-quantity returns without inventing original-invoice matches, and excludes invalid or zero-price lines from positive-sales revenue.
+
+The verified run retained **524,878 positive sale lines**, including **132,186 anonymous lines** for aggregate analysis; it created **19,960 invoice records** and **4,338 identified customers**. The remaining **17,031 rows** were audited as duplicates, cancellations, returns, invalid prices, or zero-price lines. Positive-sales revenue was **£10.64m**. It is gross positive sales in nominal GBP, before return reconciliation, and is not net revenue or profit.
+
+### Exploratory and customer analysis
+
+- **EDA:** monthly revenue, orders, customers, average order value, repeat-purchase rate, product and country contribution, and customer revenue concentration.
+- **RFM:** recency, unique invoice frequency, and positive-sales monetary value are calculated as of 10 December 2011. RFM quantile scores are provided alongside K-Means clusters.
+- **K-Means:** log1p-transformed RFM values are standardized; silhouette, Davies–Bouldin, and inertia are compared for k=2…8. The selected k=2 solution has silhouette **0.433**. A fixed-seed 100-resample bootstrap compares each k=2…6 partition to the full-sample partition using Adjusted Rand Index (ARI).
+- **Secondary segmentation:** the dashboard and `secondary_k4_profiles.csv` show an exploratory k=4 profile. It gives more detail, but its mean bootstrap ARI (**0.884**) is below k=2 (**0.980**) and the silhouette is lower (**0.334** vs. **0.433**). Keep k=2 as the simpler primary view unless the extra k=4 distinctions support a specific operating decision.
+
+Selected primary profiles from the verified run:
+
+| Profile | Customers | Median recency | Mean orders | Mean historical revenue |
+|---|---:|---:|---:|---:|
+| Champions | 1,668 | 17 days | 8.44 | £4,535.74 |
+| Needs Attention | 2,670 | 96 days | 1.67 | £494.98 |
+
+These names summarize relative historical behavior. They are not externally validated personas or treatment groups.
+
+### Repeat-purchase prediction
+
+The prediction unit is an identified customer active at least once during a **180-day observation window**. The target is any positive-sale invoice during the following **60 days**. Features use only the observation window: order count, revenue, units, average order value, recency, distinct active days, product diversity, and recent-versus-prior revenue. Customer ID is never a model feature.
+
+The primary temporal evaluation trains on the 31 May 2011 snapshot, selects model/threshold on 31 July, and tests on 10 October; the test outcome window ends at the source boundary on 9 December. Logistic Regression, Random Forest, and XGBoost are compared with two transparent ranking baselines: lower recency first and a composite RFM score. Baselines are rankings, not calibrated probabilities. Their F1 thresholds are selected on validation just like the learned model thresholds.
+
+The intervals below are percentile **95% stratified bootstrap confidence intervals with 1,000 resamples**. F1 uses the threshold selected on validation and held fixed in the test resamples. These intervals describe sampling variability at this one test cutoff; they do not capture season-to-season or retailer-to-retailer uncertainty.
+
+| Test ranking method | ROC-AUC (95% CI) | PR-AUC (95% CI) | F1 (95% CI) |
+|---|---|---|---|
+| Logistic Regression | 0.715 (0.697–0.731) | 0.762 (0.746–0.778) | 0.690 (0.677–0.703) |
+| Random Forest | 0.700 (0.681–0.719) | 0.754 (0.736–0.771) | 0.686 (0.671–0.699) |
+| XGBoost | 0.716 (0.698–0.734) | 0.762 (0.744–0.778) | 0.695 (0.681–0.708) |
+| Recency baseline | 0.613 (0.592–0.633) | 0.604 (0.584–0.625) | 0.687 (0.674–0.699) |
+| RFM-score baseline | 0.640 (0.620–0.660) | 0.677 (0.657–0.696) | 0.684 (0.669–0.696) |
+
+XGBoost was selected by validation PR-AUC (**0.733**). Its final test PR-AUC is nearly identical to Logistic Regression, and the intervals overlap substantially. The results do not establish a robust winner. Test prevalence was **53.14%** across **3,007 customer snapshots**.
+
+#### Calibration and reliability
+
+The selected model's Platt sigmoid calibrator is fitted on validation predictions and labels only; the choice to use it is also made on validation, never on the test set. Validation Brier score changed from **0.2013** uncalibrated to **0.1990** calibrated, so this run uses calibrated probabilities in the revenue-exposure proxy. On the held-out test, Brier changed from **0.2134** to **0.2175**: the validation improvement did not transfer to this test period. The reliability chart and both Brier scores are saved in the prediction artifacts. This is a single test-period diagnostic, not a guarantee that calibration will help or hurt in deployment.
+
+#### Rolling-origin evaluation
+
+Three earlier cutoffs (31 July, 31 August, and 30 September 2011) are scored independently. A historical training snapshot is eligible only if its full 60-day outcome window ends on or before that origin's evaluation date. The table reports mean and sample standard deviation of PR-AUC over these three origins:
+
+| Method | Mean PR-AUC ± origin SD |
+|---|---:|
+| Logistic Regression | 0.745 ± 0.018 |
+| Random Forest | 0.742 ± 0.013 |
+| XGBoost | 0.752 ± 0.014 |
+| Recency baseline | 0.595 ± 0.019 |
+| RFM-score baseline | 0.661 ± 0.019 |
+
+Three origins provide a useful temporal check but remain a small sample of historical scoring dates. The standard deviation is not a confidence interval.
+
+### Cohort retention and product associations
+
+Monthly cohorts use the month of first observed positive invoice. Retention at age N is active identified customers in month N divided by cohort-month customers. December 2010 is marked **left-censored** because customers may have purchased before the dataset begins; it is excluded from the headline median month-one retention. The verified median month-one retention across the 11 other cohorts with observable month one is **19.0%**. Later cohorts are right-censored where the source does not yet provide follow-up.
+
+Market basket analysis uses Apriori on invoices containing one of the 75 most frequent products; support, confidence, and lift are reported. Dashboard associations recompute within the selected filters and a smaller 35-product candidate set. Rules describe co-purchase, not a causal bundle effect.
+
+## Streamlit dashboard
+
+Run the seven pages locally:
+
+1. **Executive Overview** — filtered commercial KPIs, revenue patterns, and concentration.
+2. **Customer Segmentation** — RFM profiles, primary k=2 and secondary k=4 views, stability diagnostics, and customer export.
+3. **Predictive Intelligence** — model/baseline comparison, temporal curves, bootstrap intervals, calibration/reliability, and SHAP explanations.
+4. **Cohort Retention** — retention heatmap/curves, cohort revenue, left-censor caveat, and lifecycle measures.
+5. **Product Intelligence** — product performance and filtered Apriori rules.
+6. **Business Recommendations** — evidence-linked actions and limitations.
+7. **Data Explorer** — prepared tables and cleaning audit.
+
+Date, country, customer, segment, product, and revenue filters are available where applicable. Predictive test metrics describe fixed historical cutoffs and do not change with dashboard filters.
+
+## Architecture and outputs
 
 ```text
-app.py                                  Streamlit pages and global filters
-src/retainiq/data/download.py           UCI archive download
-src/retainiq/data/profile.py            source schema, checksum, and quality profile
-src/retainiq/preprocessing.py           typed sales, orders, customers, row audit
-src/retainiq/analytics/eda.py           commercial and concentration summaries
-src/retainiq/segmentation.py             RFM, K-Means, evaluation, PCA
-src/retainiq/prediction.py               temporal prediction, metrics, SHAP
-src/retainiq/retention.py                cohort, repeat, and lifecycle analytics
-src/retainiq/market_basket.py             Apriori associations
-src/retainiq/recommendations.py           evidence-linked decision support
-src/retainiq/run_pipeline.py              end-to-end artifact orchestration
-data/processed/                          generated analytical tables and models
-reports/                                 run metadata, recommendations, charts
-tests/                                    deterministic unit checks
+app.py                                   Streamlit presentation and filters
+src/retainiq/data/download.py            UCI data download
+src/retainiq/data/profile.py              source schema, checksum, quality profile
+src/retainiq/preprocessing.py             cleaned transaction/customer tables and audit
+src/retainiq/analytics/eda.py              EDA metrics
+src/retainiq/segmentation.py               RFM, K-Means, stability, profiles
+src/retainiq/prediction.py                 temporal models, baselines, calibration, CIs
+src/retainiq/retention.py                  cohort and lifecycle analysis
+src/retainiq/market_basket.py              Apriori analysis
+src/retainiq/recommendations.py            evidence-linked decision support
+src/retainiq/run_pipeline.py               orchestration and visual outputs
+data/processed/                            generated tables and fitted models (ignored)
+reports/                                   generated run summary and Plotly visuals (ignored)
+docs/technical_report.md                  assumptions, methods, and detailed findings
+tests/                                     unit tests and analytical invariants
 ```
 
-## Data preparation methodology
+Important generated artifacts include `reports/run_summary.json`, `data/processed/prediction/model_metrics.json`, `reliability_curve.csv`, `rolling_origin_metrics.json`, `cluster_stability.json`, `secondary_k4_profiles.csv`, and `cohort_metadata.csv`. The complete generated data and model binaries are ignored by Git and rebuilt by the pipeline.
 
-The source profile records schema, missingness, exact duplicates, cancellations, returns, suspicious numeric values, dates, and a workbook SHA-256. Preprocessing assigns each source row exactly one first-match reason so audit counts reconcile. It keeps the first exact copy, segregates invoice numbers beginning with `C`, segregates remaining negative-quantity returns without uncertain invoice matching, excludes invalid transaction fields, and removes zero-price lines from revenue outputs for review. Positive anonymous sales remain in aggregate line/order tables; customer analytics require an ID.
+## Reproduce locally
 
-Invoice tables contain one row per invoice number. Some source invoice lines carry multiple timestamps, so the order timestamp is the earliest line timestamp. Revenue is positive quantity × positive unit price in nominal GBP; returns are not subtracted from gross positive-sales revenue. See [`docs/technical_report.md`](docs/technical_report.md) for complete analytical assumptions.
-
-## Analytical methods
-
-- **EDA:** positive-sales revenue, unique invoices/customers, AOV, repeat rate, monthly/country/product sales, order distribution, and customer revenue concentration.
-- **RFM:** five-quantile RFM scores; K-Means on standardized log1p RFM values; k=2…8 compared using silhouette, inertia, and Davies–Bouldin. PCA is saved for visualization. Labels describe observed cluster profiles; they are not predetermined business personas.
-- **Prediction:** among customers active in a prior 180-day observation period, predict any positive purchase in the next 60 days. Logistic Regression, Random Forest, and XGBoost use chronological train/validation/test cutoffs; class weighting handles imbalance. Validation chooses model family and F1 threshold; final test metrics remain held out. SHAP explains the selected model.
-- **Cohorts:** first positive invoice month; retention is active customers at cohort age N divided by cohort month-zero customers. Future, unobserved months are treated as censored.
-- **Market basket:** Apriori, min support 0.5%, min confidence 15%, max itemset size 3, among invoices containing one of the 75 most frequently invoiced products. Rules with lift ≤1 are excluded. Dashboard rules recalculate within active line filters and a smaller 35-product universe.
-- **Revenue exposure:** trailing 180-day customer revenue × predicted probability of no purchase in 60 days. This is a review-prioritization proxy, not a forecast or a guaranteed loss.
-
-## Install and run
-
-Python 3.10+ is supported (the verified local environment is Python 3.13). From this directory:
+Verified with Python 3.13. Create and activate an environment, then install the exact direct dependency pins:
 
 ```bash
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
+python scripts/check_requirements_pins.py
 pip install -r requirements.txt
+```
+
+Download the source (or place the official archive in `data/raw/`), profile, clean, analyze, train, and generate artifacts:
+
+```bash
 PYTHONPATH=src python -m retainiq.data.download
 PYTHONPATH=src python -m retainiq.run_pipeline --source data/raw/online_retail.zip --project-root .
-PYTHONPATH=src streamlit run app.py --server.address 0.0.0.0 --server.port 8501
 ```
 
-The full pipeline profiles and cleans the data, builds analytics, trains the models, evaluates the temporal test, calculates SHAP explanations, and writes reports/interactive HTML figures. Model training is not repeated when navigating the dashboard; Streamlit reads saved artifacts. The local demo URL is `http://localhost:8501`.
-
-## Dashboard pages
-
-1. **Executive Overview:** filtered KPIs, monthly revenue, segment contribution, and descriptive signals.
-2. **Customer Segmentation:** filtered RFM scatter, full-period PCA cluster view, segment profile table, customer CSV.
-3. **Predictive Intelligence:** model metrics, confusion matrix, ROC/PR curves, global SHAP, selected individual explanations.
-4. **Cohort Retention:** filtered retention heatmap, retention curves, repeat and revenue by cohort.
-5. **Product Intelligence:** filtered top products and on-demand Apriori associations with CSV download.
-6. **Business Recommendations:** evidence, proposed review, relevance, and limitations for each recommendation.
-7. **Data Explorer:** processed records, audit summaries, and CSV downloads.
-
-Date, country, customer-segment, product, and line-revenue filters are available in the sidebar. Model evaluation metrics describe a fixed historical temporal test; customer and country filters narrow customer-level review, but do not retrain or alter that evaluation.
-
-## Generated outputs
-
-- `reports/profiling/source_profile.json`: source audit profile and checksum.
-- `data/processed/cleaning_audit.csv`, `cancellations.csv`, `returns.csv`, `invalid_transactions.csv`: row-level, reason-coded decisions.
-- `data/processed/sales_lines.csv`, `orders.csv`, `customers.csv`, `customer_report.csv`: analysis tables.
-- `data/processed/prediction/`: saved models, predictions, evaluation, curves, and SHAP explanations.
-- `reports/run_summary.json`, `reports/recommendations.json`, `reports/visualizations/*.html`: reproducible result summaries and charts.
-
-Generated data and model binaries are ignored by Git and can be recreated by the pipeline.
-
-## Verified full-data findings
-
-The latest pipeline run retained 524,878 positive-sales lines (including 132,186 anonymous lines) and created 19,960 unique invoice records for 4,338 identified customers. It recorded 17,031 mutually exclusive duplicate, cancellation, return, invalid-price, or zero-price rows. Gross positive-sales revenue is **£10.64m** (returns are not reconciled against original sales). The identified-customer repeat share is **65.58%** and average order value is **£533.17**.
-
-| Temporal test model | Precision | Recall | F1 | ROC-AUC | PR-AUC |
-|---|---:|---:|---:|---:|---:|
-| Logistic Regression | 0.608 | 0.797 | 0.690 | 0.715 | 0.762 |
-| Random Forest | 0.610 | 0.782 | 0.686 | 0.700 | 0.754 |
-| XGBoost | 0.621 | 0.789 | 0.695 | 0.716 | 0.762 |
-
-XGBoost was selected by validation PR-AUC (0.733) and achieved a test PR-AUC of 0.762 at a validation-selected threshold of 0.359. Its confusion matrix was `[[638, 771], [337, 1261]]` with actual classes as rows (no repeat, repeat). Logistic Regression's test PR-AUC was nearly identical, so the run does not show a robust winner. Test positive rate was 53.14% across 3,007 October customer snapshots.
-
-Silhouette selected **k=2** (0.433). The higher-activity “Champions” cluster contains 1,668 customers (38.5%; mean historical revenue £4,535.74/customer; median recency 17 days). “Needs Attention” contains 2,670 customers (61.5%; mean historical revenue £494.98/customer; median recency 96 days). These labels summarize the fitted clusters; they do not imply a causal treatment effect. Global SHAP ranked observed active days and units highest for the selected model. The strongest Apriori rule had 0.64% support, 83.33% confidence, and 15.56 lift.
-
-Saved interactive Plotly charts: [monthly revenue](reports/visualizations/monthly_revenue.html), [RFM PCA clusters](reports/visualizations/rfm_pca_clusters.html), [cohort retention](reports/visualizations/cohort_retention.html), [customer order distribution](reports/visualizations/customer_order_distribution.html), [model comparison](reports/visualizations/model_comparison.html), [global SHAP importance](reports/visualizations/shap_global_importance.html), and [top products](reports/visualizations/top_products.html).
-
-## Tests
+Launch the dashboard:
 
 ```bash
+PYTHONPATH=src streamlit run app.py --server.port 8501
+```
+
+Open `http://localhost:8501`. Run the checks:
+
+```bash
+python scripts/check_requirements_pins.py
 PYTHONPATH=src python -m unittest discover -s tests -v
 ```
 
-The test suite checks source profiling, schema validation, cleaning/audit decisions, cohort calculations and right-censoring, Apriori rules, RFM segmentation invariants, and temporal prediction-window boundaries.
+GitHub Actions runs the exact-pin check and unit suite on pushes and pull requests.
 
-## Limitations
+## Limitations and responsible interpretation
 
-This is one retailer's historical data for roughly one year, without marketing contacts, margins, inventory, channels, or treatment outcomes. Repeat purchase and revenue metrics are descriptive. The predictive test contains one late historical cutoff, so performance may vary by season or retailer. Product association is not evidence of incremental bundle lift. Segment names are post-hoc summaries of two selected clusters in the current run, not validated customer personas. Any operational decision should be monitored and experimentally evaluated.
+- The source is one retailer's roughly one-year history, ends in December 2011, and contains no margin, marketing-contact, treatment, inventory, or channel outcomes.
+- Positive-sales revenue is gross of returns; it is nominal GBP and is neither profit nor net sales.
+- The earliest December 2010 cohort is left-censored. It remains visible and marked in cohort outputs, but is excluded from headline month-one retention; the short follow-up also right-censors recent cohorts.
+- One end-of-history test and three rolling origins cannot establish broad temporal or external validity. Bootstrap intervals reflect within-test sampling uncertainty only.
+- Calibration was selected using validation Brier only. Its validation improvement did not carry through to the test set, where calibrated Brier was higher; therefore calibrated exposure rankings may be miscalibrated in a future period.
+- The revenue exposure proxy is trailing 180-day revenue times probability of no purchase in the next 60 days; it is not a revenue-loss forecast or an intervention effect.
+- SHAP describes model attribution, not causal effect. K-Means names are post-hoc profiles. Apriori lift is co-occurrence. None establishes that an action will increase retention or revenue.
+- The repeated customer snapshots and single-company setting can make performance different from a genuinely new-customer or new-retailer deployment. Validate prospectively before operational use.
+
+See [the technical report](docs/technical_report.md) for the complete methods, split dates, cleaning policy, and further verified findings.
