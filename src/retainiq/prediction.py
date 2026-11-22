@@ -79,6 +79,19 @@ def _select_threshold(y: pd.Series, probabilities: np.ndarray) -> float:
     return float(thresholds[int(np.nanargmax(f1))])
 
 
+def _add_rfm_score(snapshots: pd.DataFrame) -> pd.DataFrame:
+    """Add a conventional 3-digit RFM score independently within each cutoff."""
+    scored = snapshots.copy()
+    scored["rfm_score"] = np.nan
+    for _, idx in scored.groupby("cutoff").groups.items():
+        group = scored.loc[idx]
+        recency = pd.qcut(group["recency_days"].rank(method="first"), 5, labels=[5, 4, 3, 2, 1]).astype(int)
+        frequency = pd.qcut(group["orders_180d"].rank(method="first"), 5, labels=[1, 2, 3, 4, 5]).astype(int)
+        monetary = pd.qcut(group["revenue_180d"].rank(method="first"), 5, labels=[1, 2, 3, 4, 5]).astype(int)
+        scored.loc[idx, "rfm_score"] = (recency * 100 + frequency * 10 + monetary).to_numpy()
+    return scored
+
+
 def _metrics(y: pd.Series, probability: np.ndarray, threshold: float) -> dict:
     pred = (probability >= threshold).astype(int)
     return {
@@ -98,6 +111,7 @@ def train_and_evaluate(orders: pd.DataFrame, lines: pd.DataFrame, output_dir: Pa
     snapshots = pd.concat([
         make_snapshot(orders, lines, cutoff) for cutoff in TRAIN_CUTOFFS + VALIDATION_CUTOFFS + TEST_CUTOFFS
     ], ignore_index=True)
+    snapshots = _add_rfm_score(snapshots)
     train = snapshots[snapshots["cutoff"].isin(TRAIN_CUTOFFS)]
     valid = snapshots[snapshots["cutoff"].isin(VALIDATION_CUTOFFS)]
     test = snapshots[snapshots["cutoff"].isin(TEST_CUTOFFS)]
@@ -117,7 +131,15 @@ def train_and_evaluate(orders: pd.DataFrame, lines: pd.DataFrame, output_dir: Pa
         probability = model.predict_proba(valid[FEATURES])[:, 1]
         validation_scores[name] = float(average_precision_score(valid["label"], probability))
         thresholds[name] = _select_threshold(valid["label"], probability)
-    selected = max(validation_scores, key=validation_scores.get)
+    baseline_specs = {
+        "Recency baseline": ("recency_days", -1),
+        "RFM score baseline": ("rfm_score", 1),
+    }
+    for name, (column, direction) in baseline_specs.items():
+        validation_rank = valid[column].to_numpy(dtype=float) * direction
+        validation_scores[name] = float(average_precision_score(valid["label"], validation_rank))
+        thresholds[name] = _select_threshold(valid["label"], validation_rank)
+    selected = max(factories, key=validation_scores.get)
     # Refit on train + validation only after choosing model family and threshold on validation.
     train_valid = pd.concat([train, valid], ignore_index=True)
     results = []
@@ -142,6 +164,21 @@ def train_and_evaluate(orders: pd.DataFrame, lines: pd.DataFrame, output_dir: Pa
         prediction_rows.append(preds)
         final_models[name] = model
         joblib.dump(model, output_dir / (name.lower().replace(" ", "_") + ".joblib"))
+    for name, (column, direction) in baseline_specs.items():
+        score = test[column].to_numpy(dtype=float) * direction
+        metrics = _metrics(test["label"], score, thresholds[name])
+        metrics.update({"model": name, "model_type": "baseline", "validation_pr_auc": validation_scores[name], "test_rows": len(test), "test_positive_rate": float(test["label"].mean())})
+        results.append(metrics)
+        fpr, tpr, _ = roc_curve(test["label"], score)
+        pr_precision, pr_recall, _ = precision_recall_curve(test["label"], score)
+        test_curves.extend([{"model": name, "curve": "roc", "x": float(x), "y": float(y)} for x, y in zip(fpr, tpr)])
+        test_curves.extend([{"model": name, "curve": "precision_recall", "x": float(x), "y": float(y)} for x, y in zip(pr_recall, pr_precision)])
+        preds = test[["CustomerID", "cutoff", "label"]].copy()
+        preds["model"] = name
+        preds["probability_repeat_60d"] = np.nan
+        preds["ranking_score"] = score
+        preds["risk_band"] = pd.cut(pd.Series(score, index=test.index).rank(pct=True), [-0.01, 0.3, 0.6, 1.01], labels=["Lower rank", "Middle rank", "Higher rank"])
+        prediction_rows.append(preds)
     pd.DataFrame(results).to_json(output_dir / "model_metrics.json", orient="records", indent=2)
     pd.DataFrame(test_curves).to_csv(output_dir / "model_curves.csv", index=False)
     predictions = pd.concat(prediction_rows, ignore_index=True)

@@ -92,7 +92,8 @@ def _save_visualizations(folder: Path, eda: dict, rfm: pd.DataFrame, retention: 
     charts["cohort_retention.html"] = px.imshow(matrix, aspect="auto", zmin=0, zmax=1, color_continuous_scale="Teal", title="Monthly customer cohort retention")
     if metrics:
         metrics_frame = pd.DataFrame(metrics)
-        charts["model_comparison.html"] = px.bar(metrics_frame, x="model", y="pr_auc", color="model", title="Held-out temporal-test PR-AUC", template="plotly_dark")
+        comparison = metrics_frame.melt(id_vars="model", value_vars=["roc_auc", "pr_auc"], var_name="metric", value_name="score")
+        charts["model_comparison.html"] = px.bar(comparison, x="model", y="score", color="metric", barmode="group", title="Held-out temporal-test ranking performance", template="plotly_dark")
         shap_path = data_dir / "prediction/shap_importance.csv"
         if shap_path.exists():
             shap_frame = pd.read_csv(shap_path).sort_values("mean_abs_shap")
