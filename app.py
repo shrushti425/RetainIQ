@@ -52,6 +52,8 @@ def load_data() -> dict:
         "concentration": pd.read_csv(DATA / "concentration.csv", dtype={"CustomerID": "string"}),
         "frequency_distribution": pd.read_csv(DATA / "frequency_distribution.csv"),
         "segment_profiles": pd.read_csv(DATA / "segment_profiles.csv"),
+        "secondary_k4_profiles": pd.read_csv(DATA / "secondary_k4_profiles.csv"),
+        "cluster_stability": json.loads((DATA / "cluster_stability.json").read_text()),
         "rfm": pd.read_csv(DATA / "segmented_customers.csv", dtype={"CustomerID": "string"}),
         "retention": pd.read_csv(DATA / "retention_matrix.csv"),
         "cohort_revenue": pd.read_csv(DATA / "cohort_revenue.csv"),
@@ -214,6 +216,14 @@ def segmentation_page(data: dict, lines: pd.DataFrame, orders: pd.DataFrame, con
     st.dataframe(table.sort_values("monetary", ascending=False), width="stretch", hide_index=True, height=380)
     st.download_button("Download filtered segmentation CSV", table.to_csv(index=False).encode(), "retainiq_customer_segmentation.csv", "text/csv")
     st.caption(f"Full-period cluster count selected by maximum silhouette among k=2…8: k={data['run_summary']['segmentation']['selected_k']}. Segment names are descriptive labels based on observed relative recency, frequency, and monetary profiles; these are not treatment groups.")
+    with st.expander("Stability and secondary four-cluster view"):
+        stability = data["cluster_stability"]["solutions"]
+        stability_frame = pd.DataFrame([{"k": int(k), **values} for k, values in stability.items()])
+        st.dataframe(stability_frame, width="stretch", hide_index=True)
+        st.caption("Mean bootstrap Adjusted Rand Index compares each resampled partition with the full-sample partition; values closer to 1 indicate more consistent assignments.")
+        st.subheader("Secondary k=4 profile table")
+        st.dataframe(data["secondary_k4_profiles"], width="stretch", hide_index=True)
+        st.write(data["run_summary"]["segmentation"]["secondary_tradeoff_note"])
 
 
 def predictive_page(data: dict, context: dict) -> None:
